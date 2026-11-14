@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DSR Status and Pixel Inspector</title>
+  <script src="/plotly.min.js"></script>
+  <style>
+    :root {
+      --page: #ffffff;
+      --panel: #fff;
+      --border: #d0d5dc;
+      --text: #20252b;
+      --muted: #59616b;
+      --accent: #215fa6;
+      --accent-dark: #174878;
+      --danger: #a92d2d;
+      --inspector-side-width: 360px;
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --page: #11161d; --panel: #1b222b; --border: #35404e;
+      --text: #e5ebf2; --muted: #a8b3c2; --accent: #4b91e2;
+      --accent-dark: #3477c5; --danger: #ff7777;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--page); color: var(--text); font-family: Inter, Segoe UI, Arial, sans-serif; }
+    button { font: inherit; display: inline-flex; align-items: center; justify-content: center; text-align: center; border: 1px solid var(--border); border-radius: 3px; background: var(--panel); color: var(--text); padding: 8px 11px; cursor: pointer; }
+    button:hover:not(:disabled) { border-color: var(--accent); }
+    button:disabled { cursor: not-allowed; opacity: .48; }
+    .danger { border-color: #d7b7b7; color: var(--danger); }
+    header { position: sticky; top: 0; z-index: 50; display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
+    header h1 { margin: 0 auto 0 0; font-size: 20px; font-weight: 650; white-space: nowrap; }
+    .menu-link { display: inline-flex; align-items: center; justify-content: center; text-align: center; vertical-align: middle; border: 1px solid var(--border); border-radius: 3px; background: var(--panel); color: var(--text); padding: 8px 11px; text-decoration: none; cursor: pointer; white-space: nowrap; }
+    .menu-link:hover { border-color: var(--accent); }
+    #message { margin: 10px 16px 0; min-height: 42px; padding: 10px 12px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: var(--panel); color: var(--muted); }
+    #message.success { border-color: #b8dac3; color: #1e7a3d; background: #f4fbf6; }
+    #message.error { border-color: #e5bcbc; color: var(--danger); background: #fff7f7; }
+    .inspector-layout { display: grid; grid-template-columns: minmax(360px, 1fr) 10px var(--inspector-side-width); gap: 0; padding: 10px 12px 16px; align-items: stretch; }
+    .column-resizer { align-self: stretch; min-height: 120px; cursor: col-resize; touch-action: none; display: flex; justify-content: center; outline: none; }
+    .column-resizer::after { content: ""; width: 3px; margin: 8px 0; border-radius: 3px; background: transparent; transition: background-color 120ms ease; }
+    .column-resizer:hover::after, .column-resizer:focus-visible::after, .column-resizer.dragging::after { background: var(--accent); }
+    .panel { min-width: 0; background: var(--panel); border: 1px solid var(--border); border-radius: 0; overflow: hidden; }
+    .panel-title { margin: 0; padding: 11px 12px; border-bottom: 1px solid var(--border); font-size: 15px; font-weight: 650; text-align: left; }
+    #inspector-map-panel { display: flex; flex-direction: column; height: max(560px, calc(100vh - 145px)); }
+    #grid-map { flex: 1; width: 100%; height: 100%; min-height: 0; }
+    #grid-map .hoverlayer { display: none; }
+    .inspector-column { position: sticky; top: 72px; display: grid; grid-template-rows: minmax(260px, 1fr) minmax(240px, 1fr); gap: 10px; height: max(560px, calc(100vh - 145px)); min-width: 0; }
+    #pixel-panel { display: flex; flex-direction: column; min-height: 0; }
+    .pixel-readout { min-height: 70px; padding: 8px 10px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; line-height: 1.4; text-align: center; white-space: pre-line; overflow-wrap: anywhere; }
+    #pixel-zoom { flex: 1; width: 100%; min-height: 0; background: var(--panel); }
+    #status-panel { min-height: 0; overflow-y: auto; }
+    #status-tables details { border-top: 1px solid var(--border); }
+    #status-tables summary { padding: 8px 10px; cursor: pointer; font-size: 12px; font-weight: 620; }
+    .status-section-label { padding: 9px 10px 5px; color: var(--muted); font-size: 12px; font-weight: 700; }
+    .table-wrap { overflow-x: auto; padding: 0 8px 9px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { padding: 5px 6px; border: 1px solid var(--border); text-align: left; white-space: nowrap; }
+    th { background: #f2f5f8; font-weight: 650; }
+    .empty-table { padding: 0 10px 10px; color: var(--muted); font-size: 12px; }
+    .object-info { display: grid; grid-template-columns: minmax(82px, auto) minmax(0, 1fr); gap: 4px 8px; padding: 0 10px 9px; font-size: 11px; overflow-wrap: anywhere; }
+    .object-info-label { color: var(--muted); }
+    :root[data-theme="dark"] th { background: #242d38; color: var(--text); }
+    :root[data-theme="dark"] #grid-map .bglayer rect,
+    :root[data-theme="dark"] #pixel-zoom .bglayer rect { fill: #1b222b !important; }
+    :root[data-theme="dark"] #grid-map .xgrid path,
+    :root[data-theme="dark"] #grid-map .ygrid path,
+    :root[data-theme="dark"] #pixel-zoom .xgrid path,
+    :root[data-theme="dark"] #pixel-zoom .ygrid path { stroke: #394554 !important; }
+    :root[data-theme="dark"] #grid-map .heatmaplayer image,
+    :root[data-theme="dark"] #pixel-zoom .heatmaplayer image { filter: brightness(0.42); }
+    :root[data-theme="dark"] #grid-map .xtick text,
+    :root[data-theme="dark"] #grid-map .ytick text,
+    :root[data-theme="dark"] #pixel-zoom .xtick text,
+    :root[data-theme="dark"] #pixel-zoom .ytick text { fill: #dce4ed !important; }
+    :root[data-theme="dark"] #grid-map .main-svg text,
+    :root[data-theme="dark"] #pixel-zoom .main-svg text { fill: #dce4ed !important; }
+    :root[data-theme="dark"] .menu-link { background: var(--panel); color: var(--text); }
+    :root[data-theme="dark"] #message.success { background: #173024; }
+    :root[data-theme="dark"] #message.error { background: #351f23; }
+    @media (max-width: 900px) {
+      header { flex-wrap: wrap; }
+      header h1 { width: 100%; }
+      .inspector-layout { grid-template-columns: 1fr; gap: 12px; }
+      .column-resizer { display: none; }
+      #inspector-map-panel { height: 62vh; min-height: 420px; }
+      .inspector-column { position: static; height: auto; grid-template-rows: 340px auto; }
+      #status-panel { min-height: 240px; }
+    }
+  </style>
+  <script>try { document.documentElement.dataset.theme = localStorage.getItem("dsr-theme") || "light"; } catch (_) {}</script>
+</head>
+<body>
+  <header>
+    <h1>DSR Grid Map V23-HF4</h1>
+    <a class="menu-link" href="/">Dashboard</a>
+    <a class="menu-link" href="/text" target="_blank">Text Interface</a>
+    <button id="theme-toggle" type="button" aria-pressed="false">Dark theme</button>
+    <button id="load-base" type="button">Load Base Map</button>
+    <button id="load-scenario" type="button">Reset</button>
+    <button id="exit-server" class="danger" type="button">Exit</button>
+  </header>
+
+  <div id="message">Loading simulator state...</div>
+
+  <main class="inspector-layout">
+    <section id="inspector-map-panel" class="panel">
+      <h2 class="panel-title">Interactive map</h2>
+      <div id="grid-map"></div>
+    </section>
+    <div class="column-resizer" data-resize="inspector" role="separator" aria-label="Resize pixel inspector and status column" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="560" tabindex="0"></div>
+
+    <aside class="inspector-column">
+      <section id="pixel-panel" class="panel">
+        <h2 class="panel-title">Pixel Inspector</h2>
+        <div id="pixel-readout" class="pixel-readout">Hover over a map element to see its details.</div>
+        <div id="pixel-zoom"></div>
+      </section>
+      <section id="status-panel" class="panel">
+        <h2 class="panel-title">Status</h2>
+        <div id="status-tables"></div>
+      </section>
+    </aside>
+  </main>
+
+  <script>
+    const messageElement = document.getElementById("message");
+    const plotConfig = {responsive: true, displaylogo: false, displayModeBar: false, scrollZoom: false};
+    let latestState = null;
+    let currentPixel = null;
+    let lastStateSignature = "";
+    let isRefreshing = false;
+
+    const inspectorColumn = {property: "--inspector-side-width", min: 280, max: 560, direction: -1};
+    function setInspectorColumnWidth(width, persist = false) {
+      const nextWidth = Math.round(Math.min(inspectorColumn.max, Math.max(inspectorColumn.min, width)));
+      document.documentElement.style.setProperty(inspectorColumn.property, `${nextWidth}px`);
+      const handle = document.querySelector('[data-resize="inspector"]');
+      handle?.setAttribute("aria-valuenow", String(nextWidth));
+      if (persist) {
+        try { localStorage.setItem("dsr-inspector-column-width", String(nextWidth)); } catch (_) {}
+      }
+      requestAnimationFrame(() => {
+        for (const id of ["grid-map", "pixel-zoom"]) {
+          const plot = document.getElementById(id);
+          if (plot?.data?.length) Plotly.Plots.resize(plot);
+        }
+      });
+    }
+
+    function initializeInspectorColumnResizer() {
+      const handle = document.querySelector('[data-resize="inspector"]');
+      if (!handle) return;
+      let width = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(inspectorColumn.property)) || inspectorColumn.min;
+      try {
+        const stored = Number(localStorage.getItem("dsr-inspector-column-width"));
+        if (Number.isFinite(stored) && stored > 0) width = stored;
+      } catch (_) {}
+      setInspectorColumnWidth(width);
+
+      handle.addEventListener("pointerdown", event => {
+        if (window.innerWidth <= 900) return;
+        event.preventDefault();
+        const startX = event.clientX;
+        const startWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(inspectorColumn.property)) || inspectorColumn.min;
+        handle.classList.add("dragging");
+        document.body.style.cursor = "col-resize";
+        document.body.style.userSelect = "none";
+        handle.setPointerCapture(event.pointerId);
+        const move = moveEvent => {
+          if (moveEvent.pointerId === event.pointerId) setInspectorColumnWidth(startWidth + (moveEvent.clientX - startX) * inspectorColumn.direction);
+        };
+        const finish = finishEvent => {
+          if (finishEvent.pointerId !== event.pointerId) return;
+          handle.removeEventListener("pointermove", move);
+          handle.removeEventListener("pointerup", finish);
+          handle.removeEventListener("pointercancel", finish);
+          handle.classList.remove("dragging");
+          document.body.style.cursor = "";
+          document.body.style.userSelect = "";
+          handle.releasePointerCapture(event.pointerId);
+          const currentWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(inspectorColumn.property)) || startWidth;
+          setInspectorColumnWidth(currentWidth, true);
+        };
+        handle.addEventListener("pointermove", move);
+        handle.addEventListener("pointerup", finish);
+        handle.addEventListener("pointercancel", finish);
+      });
+      handle.addEventListener("keydown", event => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        const currentWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(inspectorColumn.property)) || inspectorColumn.min;
+        const delta = (event.key === "ArrowRight" ? 12 : -12) * inspectorColumn.direction;
+        setInspectorColumnWidth(currentWidth + delta, true);
+      });
+    }
+    initializeInspectorColumnResizer();
+
+    function escapeHtml(value) {
+      return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
+    }
+
+    function showMessage(text, kind = "") {
+      messageElement.textContent = text || "Ready.";
+      messageElement.className = kind;
+    }
+
+    async function requestJson(url, options = {}) {
+      const response = await fetch(url, {headers: {"Content-Type": "application/json"}, ...options});
+      const payload = await response.json();
+      if (!response.ok || payload.ok === false) throw new Error(payload.message || `Request failed: ${response.status}`);
+      return payload;
+    }
+
+    function stateSignature(state) {
+      const summary = state.summary || {};
+      return JSON.stringify([
+        summary.time_step, summary.event_id, summary.known_faults,
+        summary.energized_active_power, summary.weighted_energized_load,
+        summary.source_status, summary.grid_active_power, summary.grid_reactive_power,
+        state.game?.max_time_step, state.message,
+      ]);
+    }
+
+    function tableHtml(table) {
+      if (!table.rows.length) return `<div class="empty-table">No rows to display.</div>`;
+      const head = table.headers.map(header => `<th>${escapeHtml(header)}</th>`).join("");
+      const body = table.rows.map(row => `<tr>${row.map(value => `<td>${escapeHtml(value)}</td>`).join("")}</tr>`).join("");
+      return `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+    }
+
+    function renderStatusTables(tables, objects) {
+      const objectRows = (objects || []).map(object => {
+        const resources = object.type === "RC"
+          ? `${object.remaining_resources}/${object.total_resources}`
+          : (object.type === "MPS" ? `${object.energy}/${object.energy_capacity} kW.step` : "N/A");
+        const capability = object.type === "MPS"
+          ? `<span class="object-info-label">Output</span><span>P=${escapeHtml(object.current_p)} kW, Q=${escapeHtml(object.current_q)} kVar</span><span class="object-info-label">Areas</span><span>${escapeHtml(object.supply_context?.areas?.join(", ") || "-")}</span>`
+          : `<span class="object-info-label">Repair speed</span><span>${escapeHtml(object.type === "RC" ? object.repair_speed : "N/A")}</span>`;
+        return `<details><summary>${escapeHtml(object.name)} · ${escapeHtml(object.type)} <span style="float:right;color:var(--muted)">${escapeHtml(object.state)}</span></summary>
+          <div class="object-info"><span class="object-info-label">Position</span><span>${escapeHtml(JSON.stringify(object.position))}</span>
+          <span class="object-info-label">Move speed</span><span>${escapeHtml(object.move_speed)}</span>
+          <span class="object-info-label">Inspection range</span><span>${escapeHtml(object.inspection_range)}</span>${capability}
+          <span class="object-info-label">Resources/Energy</span><span>${escapeHtml(resources)}</span>
+          <span class="object-info-label">Remaining path</span><span>${escapeHtml(object.remaining_path_pixels)} Pixels</span>
+          <span class="object-info-label">Analysis capability</span><span>${object.fault_analysis_enabled ? "Enabled" : "Disabled"}</span>
+          <span class="object-info-label">Analysis lock</span><span>${object.analysis_locked ? escapeHtml(object.analysis_faults?.join(", ") || "Active") : "No"}</span>
+          <span class="object-info-label">Current command</span><span>${escapeHtml(object.current_command)}</span></div></details>`;
+      }).join("");
+      const openByDefault = new Set(["sources", "mps", "energized_loads", "faults"]);
+      const tableRows = Object.entries(tables || {}).map(([key, table]) => `
+        <details ${openByDefault.has(key) ? "open" : ""}><summary>${escapeHtml(table.title)} (${table.rows.length})</summary>${tableHtml(table)}</details>
+      `).join("");
+      document.getElementById("status-tables").innerHTML = `<div class="status-section-label">Object States (${(objects || []).length})</div>${objectRows}${tableRows}`;
+    }
+
+    function renderPixelZoom(x, y) {
+      if (!latestState?.figure) return;
+      const marker = {
+        type: "scatter", mode: "markers", x: [x], y: [y],
+        marker: {symbol: "square-open", size: 26, color: "#215fa6", line: {width: 2}},
+        hoverinfo: "skip", showlegend: false,
+      };
+      const layout = {
+        ...latestState.figure.layout, autosize: true, title: {text: ""}, margin: {l: 8, r: 8, t: 8, b: 8},
+        uirevision: `inspector-pixel-${x}-${y}-${latestState.summary.time_step}`,
+        xaxis: {...latestState.figure.layout.xaxis, range: [x - 3.5, x + 3.5], fixedrange: true, constrain: "domain", constraintoward: "center", showticklabels: false, title: {text: ""}},
+        yaxis: {...latestState.figure.layout.yaxis, range: [y - 3.5, y + 3.5], fixedrange: true, constrain: "domain", constraintoward: "middle", showticklabels: false, title: {text: ""}},
+      };
+      delete layout.width;
+      delete layout.height;
+      Plotly.react("pixel-zoom", [...latestState.figure.data, marker], layout, plotConfig);
+    }
+
+    function inspectPixel(event) {
+      const point = event?.points?.[0];
+      if (!point) return;
+      const x = Math.round(Number(point.x));
+      const y = Math.round(Number(point.y));
+      const pixel = latestState?.pixels?.[`${x},${y}`];
+      if (!pixel) return;
+      currentPixel = {x, y};
+      const trace = point.data || point.fullData || {};
+      const elementName = String(trace.name || point.text || "Map element");
+      const template = String(trace.hovertemplate || "");
+      const elementDetails = template
+        .replace(/<extra>[\s\S]*?<\/extra>/gi, "")
+        .replace(/<br\s*\/?\s*>/gi, "\n")
+        .replace(/<[^>]*>/g, "")
+        .replace(/%\{([^}]+)\}/g, (_, field) => {
+          const key = field.split(/[|:]/, 1)[0];
+          const value = key === "customdata" ? point.customdata : point[key];
+          return value == null ? "" : String(value);
+        })
+        .replaceAll("&nbsp;", " ")
+        .trim();
+      const details = elementDetails
+        ? elementDetails.split("\n").map(line => line.trim()).filter(Boolean)
+        : [elementName, `Position: (${x}, ${y})`];
+      if (!details.some(line => line.startsWith("Pixel ("))) details.push(`Pixel (${x}, ${y})`);
+      details.push(`${pixel.knowledge} · Road L${pixel.road_level}`);
+      if (pixel.nodes?.length) details.push(`Node: ${pixel.nodes.join(", ")}`);
+      if (pixel.lines?.length) details.push(`Line: ${pixel.lines.join(", ")}`);
+      if (pixel.faults?.length) details.push(`Fault: ${pixel.faults.join(", ")}`);
+      document.getElementById("pixel-readout").textContent = [...new Set(details)].join("\n");
+      renderPixelZoom(x, y);
+    }
+
+    async function renderMap(figure) {
+      const map = document.getElementById("grid-map");
+      const layout = {...figure.layout, autosize: true};
+      delete layout.width;
+      delete layout.height;
+      await Plotly.react(map, figure.data, layout, plotConfig);
+      requestAnimationFrame(() => Plotly.Plots.resize(map));
+      map.removeAllListeners?.("plotly_hover");
+      map.on("plotly_hover", inspectPixel);
+    }
+
+    async function refreshState(showStatus = false) {
+      if (isRefreshing) return;
+      isRefreshing = true;
+      try {
+        const state = await requestJson("/api/state");
+        const signature = stateSignature(state);
+        latestState = state;
+        if (signature !== lastStateSignature) {
+          lastStateSignature = signature;
+          renderStatusTables(state.tables, state.objects);
+          await renderMap(state.figure);
+          if (!currentPixel || !state.pixels?.[`${currentPixel.x},${currentPixel.y}`]) {
+            const firstPixel = Object.keys(state.pixels || {})[0];
+            const [x, y] = (firstPixel || "0,0").split(",").map(Number);
+            currentPixel = {x, y};
+          }
+          renderPixelZoom(currentPixel.x, currentPixel.y);
+        }
+        if (showStatus) showMessage(state.message || "Simulator state refreshed.", "success");
+      } catch (error) {
+        showMessage(error.message, "error");
+      } finally {
+        isRefreshing = false;
+      }
+    }
+
+    async function loadMode(mode) {
+      try {
+        document.querySelectorAll("header button").forEach(button => button.disabled = true);
+        const state = await requestJson("/api/load", {
+          method: "POST",
+          body: JSON.stringify({mode, max_time_step: latestState?.game?.max_time_step}),
+        });
+        lastStateSignature = "";
+        latestState = state;
+        await refreshState(true);
+      } catch (error) {
+        showMessage(error.message, "error");
+      } finally {
+        document.querySelectorAll("header button").forEach(button => button.disabled = false);
+      }
+    }
+
+    document.getElementById("load-base").addEventListener("click", () => loadMode("base"));
+    document.getElementById("load-scenario").addEventListener("click", () => loadMode("scenario"));
+    document.getElementById("exit-server").addEventListener("click", async () => {
+      try {
+        await requestJson("/api/shutdown", {method: "POST", body: "{}"});
+        showMessage("Server shutdown requested. This page will stop responding.", "success");
+      } catch (error) {
+        showMessage(error.message, "error");
+      }
+    });
+    window.addEventListener("resize", () => {
+      for (const id of ["grid-map", "pixel-zoom"]) {
+        const plot = document.getElementById(id);
+        if (plot?.data?.length) Plotly.Plots.resize(plot);
+      }
+    });
+
+    refreshState();
+    window.setInterval(() => refreshState(), 3000);
+  </script>
+  <script>
+    (() => {
+      const root = document.documentElement;
+      const button = document.getElementById("theme-toggle");
+      const apply = theme => {
+        root.dataset.theme = theme;
+        button.textContent = theme === "dark" ? "Light theme" : "Dark theme";
+        button.setAttribute("aria-pressed", String(theme === "dark"));
+        try { localStorage.setItem("dsr-theme", theme); } catch (_) {}
+      };
+      apply(root.dataset.theme || "light");
+      button.addEventListener("click", () => apply(root.dataset.theme === "dark" ? "light" : "dark"));
+    })();
+  </script>
+</body>
+</html>
