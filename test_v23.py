@@ -101,6 +101,18 @@ backend.execute_current_step(
 )
 assert backend.game_score.score == 0
 
+# Plot history keeps score and stored energy aligned even after the score locks.
+assert backend.game_score.score_history == [0, 2990, 0, 0]
+assert backend.mps_energy_history == [
+    {"MPS1": 8000},
+    {"MPS1": 7200},
+    {"MPS1": 7200},
+    {"MPS1": 6400},
+]
+backend.load_map(render_output=False)
+assert backend.game_score.score_history == []
+assert backend.mps_energy_history == []
+
 # Maximum-step ending and command lock.
 backend = DSRDashboardBackend(PROJECT, Path(tempfile.mkdtemp()))
 backend.configure_max_time_step(2)
@@ -141,6 +153,8 @@ assert backend.all_loads_restored()
 assert backend.game_score.ended
 assert backend.game_score.projected_steps == 4
 assert abs(backend.game_score.score - total_weighted * 5) < 1e-9
+assert backend.game_score.score_history == [0, backend.game_score.score]
+assert len(backend.mps_energy_history) == 2
 assert backend.game_payload()["total_active_load"] == total_p
 assert backend.game_payload()["total_weighted_load"] == total_weighted
 
@@ -158,6 +172,7 @@ import simulator_web_v23 as web
 
 route_paths = {route.path for route in web.app.routes}
 for required in {
+    "/score-plots", "/api/game/score-history",
     "/text", "/api/text/state", "/api/text/state.txt",
     "/api/text/validate", "/api/text/execute",
 }:
@@ -196,11 +211,15 @@ async def api_tests():
     assert body["predicted_state"]["game"]["time_step"] == 1
     assert body["predicted_state"]["game"]["weighted_restored_load"] == 2990
     assert body["predicted_state"]["game"]["score"] == 2990
+    assert json.loads(web.get_score_history().body)["mps_energy_history"] == [{"MPS1": 8000}]
 
     response = await web.execute_text_command(RequestStub(valid))
     body = json.loads(response.body)
     assert response.status_code == 200 and body["ok"]
     assert web.backend.time_step == 1
+    history = json.loads(web.get_score_history().body)
+    assert history["score_history"] == [0, 2990]
+    assert history["mps_energy_history"] == [{"MPS1": 8000}, {"MPS1": 7200}]
 
     invalid = {
         "switch_commands": {},

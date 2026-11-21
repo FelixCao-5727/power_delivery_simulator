@@ -6351,6 +6351,7 @@ _v23_game_base_execute_current_step = DSRDashboardBackend.execute_current_step
 def _v23_game_post_init(self: DSRDashboardBackend) -> None:
     _v23_game_base_post_init(self)
     self.game_score = GameScore(max_time_step=20)
+    self.mps_energy_history: list[Dict[str, float]] = []
     self.configured_unknown_regions: list[Dict[str, object]] = []
     self.configured_unknown_regions = self.default_unknown_region_payload()
 
@@ -6639,6 +6640,7 @@ def _v23_game_load_map(
 
     result = _v23_game_base_load_map(self, render_output=False)
     self.game_score.reset()
+    self.mps_energy_history = []
     self.configured_unknown_regions = self.default_unknown_region_payload()
     self.stage = "Base map loaded; configure N and unknown regions"
     return self.render("base_map.png") if render_output else result
@@ -6882,6 +6884,7 @@ class WeightedGameScore:
     violation_loads: list[str] = field(default_factory=list)
     completion_step: Optional[int] = None
     projected_steps: int = 0
+    score_history: list[float] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.configure(self.max_time_step)
@@ -6925,6 +6928,7 @@ class WeightedGameScore:
         self.violation_loads = []
         self.completion_step = None
         self.projected_steps = 0
+        self.score_history = []
 
     def start(
         self,
@@ -6947,6 +6951,7 @@ class WeightedGameScore:
         self.energized_load_history = [current_loads]
         self.ever_energized_loads = set(current_loads)
         self.score = weighted_value
+        self.score_history.append(self.score)
         self.started = True
 
     def record(
@@ -6980,17 +6985,15 @@ class WeightedGameScore:
         lost_loads = sorted(self.ever_energized_loads - current_load_set)
         self.ever_energized_loads.update(current_load_set)
 
-        if self.locked:
-            return
-
-        if lost_loads:
-            self.score = 0.0
-            self.locked = True
-            self.violation_step = time_step
-            self.violation_loads = lost_loads
-            return
-
-        self.score += weighted_value
+        if not self.locked:
+            if lost_loads:
+                self.score = 0.0
+                self.locked = True
+                self.violation_step = time_step
+                self.violation_loads = lost_loads
+            else:
+                self.score += weighted_value
+        self.score_history.append(self.score)
 
     def finish_at_limit(self, time_step: int) -> None:
         """Finish normally when the maximum time step is reached."""
@@ -7016,6 +7019,8 @@ class WeightedGameScore:
         )
         if not self.locked:
             self.score += remaining_steps * weighted_value
+            if self.score_history:
+                self.score_history[-1] = self.score
         self.projected_steps = remaining_steps
         self.ended = True
         self.completion_step = time_step
@@ -7055,6 +7060,7 @@ class WeightedGameScore:
         return {
             "max_time_step": self.max_time_step,
             "score": self.score,
+            "score_history": list(self.score_history),
             "power_history": list(self.power_history),
             "weighted_load_history": list(self.weighted_load_history),
             "energized_load_history": [
@@ -7135,6 +7141,10 @@ def _hf2_game_payload(self: DSRDashboardBackend) -> Dict[str, object]:
 _hf2_previous_load_faults_and_unknown = DSRDashboardBackend.load_faults_and_unknown
 
 
+def _mps_energy_snapshot(backend: DSRDashboardBackend) -> Dict[str, float]:
+    return {name: unit.energy for name, unit in backend.mps_units.items()}
+
+
 def _hf2_load_faults_and_unknown(
     self: DSRDashboardBackend,
     render_output: bool = True,
@@ -7154,6 +7164,7 @@ def _hf2_load_faults_and_unknown(
         weighted_restored_load=self.weighted_restored_load(),
     )
     self.stage = "Weighted scored fault scenario loaded at time step 0"
+    self.mps_energy_history = [_mps_energy_snapshot(self)]
 
     if self.all_faults_cleared() and self.all_loads_restored():
         self.game_score.finish_early(
@@ -7199,6 +7210,7 @@ def _hf2_execute_current_step(
         energized_loads=self.energized_load_names(),
         weighted_restored_load=self.weighted_restored_load(),
     )
+    self.mps_energy_history.append(_mps_energy_snapshot(self))
 
     if (
         self.all_faults_cleared()

@@ -21,6 +21,7 @@ APP_DIR = Path(__file__).resolve().parent
 INDEX_PATH = APP_DIR / "index_v23.html"
 TEXT_INDEX_PATH = APP_DIR / "text_v23.html"
 INSPECTOR_INDEX_PATH = APP_DIR / "inspector_v23.html"
+SCORE_PLOTS_PATH = APP_DIR / "score_plots_v23.html"
 
 try:
     RUNTIME_DIR = APP_DIR / "runtime"
@@ -520,6 +521,26 @@ def text_index() -> HTMLResponse:
 @app.get("/plotly.min.js")
 def plotly_script() -> Response:
     return Response(plotly_javascript, media_type="application/javascript")
+
+
+@app.get("/score-plots", response_class=HTMLResponse)
+def score_plots_index() -> HTMLResponse:
+    return HTMLResponse(
+        SCORE_PLOTS_PATH.read_text(encoding="utf-8"),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/api/game/score-history")
+def get_score_history() -> JSONResponse:
+    with backend_lock:
+        game = backend.game_score
+        return JSONResponse({
+            "score_history": game.score_history,
+            "mps_energy_history": backend.mps_energy_history,
+            "projected_steps": game.projected_steps,
+            "locked": game.locked,
+        }, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/state")

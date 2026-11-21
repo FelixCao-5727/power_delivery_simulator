@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Score &amp; E Plots | DSR Grid Map</title>
+  <script src="/plotly.min.js"></script>
+  <style>
+    :root {
+      --page: #f4f6f8;
+      --panel: #ffffff;
+      --border: #d0d5dc;
+      --text: #20252b;
+      --muted: #59616b;
+      --score: #215fa6;
+      --energy: #087769;
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --page: #11161d;
+      --panel: #1b222b;
+      --border: #35404e;
+      --text: #e5ebf2;
+      --muted: #a8b3c2;
+      --score: #75b5ff;
+      --energy: #61cbb8;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--page); color: var(--text); font-family: Inter, "Segoe UI", Arial, sans-serif; }
+    main { max-width: 1280px; margin: 0 auto; padding: clamp(16px, 4vw, 40px); }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 12px 20px; flex-wrap: wrap; }
+    h1 { margin: 0; font-size: clamp(22px, 4vw, 30px); }
+    header a { padding: 8px 11px; border: 1px solid var(--border); border-radius: 3px; color: var(--text); background: var(--panel); text-decoration: none; }
+    header a:hover { border-color: var(--score); }
+    #status { color: var(--muted); margin: 16px 0; }
+    .charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .charts[hidden] { display: none; }
+    section { min-width: 0; padding: 16px 12px 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); }
+    section h2 { margin: 0 8px; font-size: 17px; }
+    .chart { height: 330px; }
+    @media (max-width: 760px) {
+      .charts { grid-template-columns: minmax(0, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Score &amp; E Plots</h1>
+      <a href="/">Dashboard</a>
+    </header>
+    <p id="status" role="status">Loading score history…</p>
+    <div id="charts" class="charts" hidden>
+      <section aria-labelledby="score-title">
+        <h2 id="score-title">Score by step</h2>
+        <div id="score-plot" class="chart"></div>
+      </section>
+      <section aria-labelledby="energy-title">
+        <h2 id="energy-title">Remaining mobile power source energy by step</h2>
+        <div id="energy-plot" class="chart"></div>
+        <p id="energy-empty" hidden>No mobile power sources in this scenario.</p>
+      </section>
+    </div>
+  </main>
+  <script>
+    const root = document.documentElement;
+    const charts = document.getElementById("charts");
+    const status = document.getElementById("status");
+    let lastRender;
+
+    function syncTheme() {
+      try { root.dataset.theme = localStorage.getItem("dsr-theme") || "light"; } catch (_) {}
+    }
+
+    function renderPlot(id, series, label, colorName) {
+      const styles = getComputedStyle(root);
+      const color = styles.getPropertyValue(colorName).trim();
+      const gridcolor = styles.getPropertyValue("--border").trim();
+      const traces = series.map(({name, values}) => ({
+        name,
+        x: values.map((_, step) => step),
+        y: values,
+        type: "scatter",
+        mode: "lines+markers",
+        line: {width: 2},
+        marker: {size: 7},
+        hovertemplate: `${name}<br>Step %{x}<br>${label} = %{y}<extra></extra>`,
+      }));
+      return Plotly.react(id, traces, {
+        colorway: [color, "#ad6348", "#9169bc", "#477f97", "#a77d24"],
+        paper_bgcolor: "transparent",
+        plot_bgcolor: "transparent",
+        font: {color: styles.getPropertyValue("--text").trim(), family: 'Inter, "Segoe UI", Arial, sans-serif'},
+        margin: {l: 42, r: 16, t: 26, b: 52},
+        xaxis: {title: {text: "Step taken"}, gridcolor, dtick: traces[0].x.length <= 20 ? 1 : undefined, tickformat: "d", zeroline: false},
+        yaxis: {title: {text: label}, gridcolor, automargin: true, rangemode: "tozero", zerolinecolor: gridcolor},
+        showlegend: traces.length > 1,
+        legend: {orientation: "h", y: 1.04, yanchor: "bottom"},
+      }, {responsive: true, displaylogo: false});
+    }
+
+    async function refreshPlots() {
+      try {
+        syncTheme();
+        const response = await fetch("/api/game/score-history", {cache: "no-store"});
+        if (!response.ok) throw new Error("Score history request failed");
+        const game = await response.json();
+        const renderKey = JSON.stringify([game, root.dataset.theme]);
+        if (renderKey === lastRender) return;
+
+        const stepCount = game.score_history.length;
+        charts.hidden = stepCount === 0;
+        if (stepCount) {
+          const sourceNames = Object.keys(game.mps_energy_history[0]);
+          document.getElementById("energy-empty").hidden = sourceNames.length > 0;
+          document.getElementById("energy-plot").hidden = sourceNames.length === 0;
+          const plots = [renderPlot("score-plot", [{name: "Score", values: game.score_history}], "Score", "--score")];
+          if (sourceNames.length) {
+            const energySeries = sourceNames.map(name => ({
+              name,
+              values: game.mps_energy_history.map(snapshot => snapshot[name]),
+            }));
+            plots.push(renderPlot("energy-plot", energySeries, "E (kW·step)", "--energy"));
+          }
+          await Promise.all(plots);
+          const details = [`Current step ${stepCount - 1}`];
+          if (game.locked) {
+            details.push("Score locked at zero");
+          } else if (game.projected_steps) {
+            details.push(`Final score includes ${game.projected_steps} projected ${game.projected_steps === 1 ? "step" : "steps"}`);
+          }
+          status.textContent = details.join(" · ");
+        } else {
+          status.textContent = "Load a fault scenario in the dashboard to start plotting.";
+        }
+        lastRender = renderKey;
+      } catch (_) {
+        lastRender = undefined;
+        status.textContent = "Could not update the plots. Retrying…";
+      } finally {
+        window.setTimeout(refreshPlots, 2000);
+      }
+    }
+
+    refreshPlots();
+  </script>
+</body>
+</html>
